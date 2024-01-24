@@ -1,0 +1,134 @@
+#include <Arduino.h>
+#include <arduino_secrets.h>
+#include <ArduinoHttpClient.h>
+#include <WiFi.h>
+#include <WS2812FX.h>
+
+const char *containerName = "RVC-Vivo-1";
+
+const char *ssid = SECRET_SSID;
+const char *pass = SECRET_PASS;
+
+const int ECHO_PIN = 22;
+const int TRIG_PIN = 23;
+
+const int ledCount = 24;
+const int ledPin = 26;
+WS2812FX ws2812fx = WS2812FX(ledCount, ledPin, NEO_GRB + NEO_KHZ800);
+
+char serverName[] = "192.168.1.8";
+int port = 8000;
+
+WiFiClient wifi;
+HttpClient client = HttpClient(wifi, serverName, port);
+
+int status = WL_IDLE_STATUS;
+
+int cnt = 0;
+bool objectDetected = false;
+bool lightIdle = false;
+
+unsigned long currentMillis = 0;
+unsigned long startMillis = 0;
+const int interval = 2500;
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(2500);
+
+    // Setup Ultrasonic Sensor
+    pinMode(TRIG_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
+
+    // Setup LED
+    ws2812fx.init();
+    ws2812fx.setBrightness(20);
+    ws2812fx.setSpeed(400);
+    ws2812fx.setColor(0x00FF55);
+    ws2812fx.setMode(FX_MODE_LARSON_SCANNER);
+    ws2812fx.start();
+
+    // Setup WiFi
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pass);
+    Serial.print("Connecting to WiFi ..");
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.print('.');
+        delay(1000);
+    }
+    Serial.println("");
+
+    // Print the SSID of the network you're attached to:
+    Serial.print("SSID: ");
+    Serial.println(WiFi.SSID());
+
+    // Print your WiFi shield's IP address:
+    IPAddress ip = WiFi.localIP();
+    Serial.print("IP Address: ");
+    Serial.println(ip);
+
+    // Done
+    Serial.println("Setup done! ✅");
+    Serial.println("--------------------");
+}
+
+void loop()
+{
+    ws2812fx.service();
+
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+
+    float distance_cm = 0.017 * pulseIn(ECHO_PIN, HIGH);
+
+    if (distance_cm < 10 && !objectDetected)
+    {
+        objectDetected = true;
+        cnt++;
+
+        currentMillis = millis();
+        startMillis = millis();
+        ws2812fx.setMode(FX_MODE_RAINBOW_CYCLE);
+        ws2812fx.start();
+        lightIdle = false;
+
+        Serial.print("Object detected: ");
+        Serial.println(cnt);
+    }
+    else if (distance_cm > 10 && objectDetected)
+    {
+        objectDetected = false;
+    }
+
+    if ((currentMillis - startMillis) >= interval && !lightIdle)
+    {
+        ws2812fx.setMode(FX_MODE_LARSON_SCANNER);
+        ws2812fx.start();
+        lightIdle = true;
+    }
+
+    if (objectDetected)
+    {
+        // Networking
+        Serial.println("making POST request");
+        String contentType = "application/json";
+        String postData = "{\"containerName\":\"" + String(containerName) + "\",\"cnt\":" + cnt + "}";
+
+        client.post("/api", contentType, postData);
+
+        // read the status code and body of the response
+        int statusCode = client.responseStatusCode();
+        String response = client.responseBody();
+
+        Serial.print("Status code: ");
+        Serial.println(statusCode);
+        Serial.print("Response: ");
+        Serial.println(response);
+        Serial.println("Wait 2.5 seconds");
+    }
+
+    delay(50);
+}
